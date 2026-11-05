@@ -14,8 +14,8 @@ jobs:
       - name: Descargar kernel
         uses: actions/checkout@v4
         with:
-          repository: Exynos3475/android_kernel_samsung_exynos3475
-          ref: lineage-17.1
+          repository: KarlosComK/android_kernel_samsung_exynos3475
+          ref: cm-14.1
           path: kernel
 
       - name: Descargar compilador ARM
