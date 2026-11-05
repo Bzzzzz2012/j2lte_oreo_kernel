@@ -48,14 +48,14 @@ jobs:
 
           grep 'CONFIG_ANDROID_BINDER' out/.config
 
-          make -C kernel O="$GITHUB_WORKSPACE/out" -j2 zImage
+          make -C kernel O="$GITHUB_WORKSPACE/out" -j2 zImage-dtb
 
-          test -s out/arch/arm/boot/zImage
+          test -s out/arch/arm/boot/zImage-dtb
 
       - name: Guardar resultado
         uses: actions/upload-artifact@v4
         with:
           name: J200M-Oreo-Kernel-EXPERIMENTAL
-          path: out/arch/arm/boot/zImage
+          path: out/arch/arm/boot/zImage-dtb
           if-no-files-found: error
 
