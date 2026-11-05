@@ -1,5 +1,5 @@
 
-name: J200M Oreo Kernel - Base 3475
+name: J200M Oreo Kernel - Base 3475 FIXED
 
 on:
   push:
@@ -12,14 +12,14 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Descargar kernel
+      - name: Descargar 3475Kernel
         uses: actions/checkout@v4
         with:
           repository: KarlosComK/android_kernel_samsung_exynos3475
           ref: cm-14.1
           path: kernel
 
-      - name: Descargar compilador ARM
+      - name: Descargar compilador ARM GCC 4.9
         uses: actions/checkout@v4
         with:
           repository: LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9
@@ -29,9 +29,29 @@ jobs:
       - name: Instalar dependencias
         run: |
           sudo apt-get update
-          sudo apt-get install -y make bc bison flex libssl-dev libelf-dev
+          sudo apt-get install -y \
+            make bc bison flex \
+            libssl-dev libelf-dev
 
-      - name: Compilar kernel base
+      - name: Corregir error yylloc de DTC
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          for f in \
+            kernel/scripts/dtc/dtc-lexer.l \
+            kernel/scripts/dtc/dtc-lexer.lex.c_shipped
+          do
+            if [ -f "$f" ]; then
+              sed -i \
+                '/^[[:space:]]*YYLTYPE[[:space:]]\+yylloc;[[:space:]]*$/d' \
+                "$f"
+            fi
+          done
+
+          echo "Correccion DTC aplicada"
+
+      - name: Configurar kernel J2LTE
         shell: bash
         run: |
           set -euxo pipefail
@@ -41,19 +61,32 @@ jobs:
 
           mkdir -p out
 
-          make -C kernel O="$GITHUB_WORKSPACE/out" \
+          make -C kernel \
+            O="$GITHUB_WORKSPACE/out" \
             lineage-j2lte_defconfig
 
           grep '^CONFIG_ANDROID_BINDER_IPC=y$' out/.config
 
-          make -C kernel O="$GITHUB_WORKSPACE/out" -j2 zImage
+      - name: Compilar kernel base
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export ARCH=arm
+          export CROSS_COMPILE="$GITHUB_WORKSPACE/gcc/bin/arm-linux-androideabi-"
+
+          make -C kernel \
+            O="$GITHUB_WORKSPACE/out" \
+            -j2 zImage
 
           test -s out/arch/arm/boot/zImage
 
-      - name: Guardar resultado
+          echo "Kernel compilado correctamente"
+
+      - name: Guardar kernel compilado
         uses: actions/upload-artifact@v4
         with:
-          name: J200M-3475Kernel-BASE
+          name: J200M-3475Kernel-BASE-FIXED
           path: |
             out/arch/arm/boot/zImage
             out/.config
