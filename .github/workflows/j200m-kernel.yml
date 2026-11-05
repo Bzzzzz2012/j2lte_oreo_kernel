@@ -1,1 +1,62 @@
 
+name: J200M Oreo Kernel
+
+on:
+  push:
+    paths:
+      - ".github/workflows/j200m-kernel.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Descargar kernel
+        uses: actions/checkout@v4
+        with:
+          repository: Exynos3475/android_kernel_samsung_exynos3475
+          ref: lineage-17.1
+          path: kernel
+
+      - name: Descargar compilador ARM
+        uses: actions/checkout@v4
+        with:
+          repository: LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9
+          ref: lineage-19.1
+          path: gcc
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make bc bison flex libssl-dev libelf-dev
+
+      - name: Compilar kernel
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export ARCH=arm
+          export CROSS_COMPILE="$GITHUB_WORKSPACE/gcc/bin/arm-linux-androideabi-"
+          mkdir -p out
+
+          make -C kernel O="$GITHUB_WORKSPACE/out" lineage-j2lte_defconfig
+
+          kernel/scripts/config --file out/.config \
+            --enable ANDROID_BINDER_IPC \
+            --set-str ANDROID_BINDER_DEVICES "binder,hwbinder,vndbinder"
+
+          make -C kernel O="$GITHUB_WORKSPACE/out" olddefconfig
+
+          grep 'CONFIG_ANDROID_BINDER' out/.config
+
+          make -C kernel O="$GITHUB_WORKSPACE/out" -j2 zImage
+
+          test -s out/arch/arm/boot/zImage
+
+      - name: Guardar resultado
+        uses: actions/upload-artifact@v4
+        with:
+          name: J200M-Oreo-Kernel-EXPERIMENTAL
+          path: out/arch/arm/boot/zImage
+          if-no-files-found: error
+
