@@ -1,4 +1,5 @@
-name: J200M Oreo Kernel
+
+name: J200M Oreo Kernel - Base 3475
 
 on:
   push:
@@ -11,14 +12,14 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Descargar kernel
+      - name: Descargar 3475Kernel
         uses: actions/checkout@v4
-        with: 
+        with:
           repository: KarlosComK/android_kernel_samsung_exynos3475
           ref: cm-14.1
           path: kernel
 
-      - name: Descargar compilador ARM
+      - name: Descargar compilador ARM GCC 4.9
         uses: actions/checkout@v4
         with:
           repository: LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9
@@ -28,34 +29,53 @@ jobs:
       - name: Instalar dependencias
         run: |
           sudo apt-get update
-          sudo apt-get install -y make bc bison flex libssl-dev libelf-dev
+          sudo apt-get install -y \
+            make \
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev
 
-      - name: Compilar kernel
+      - name: Configurar kernel J2LTE
         shell: bash
         run: |
           set -euxo pipefail
+
           export ARCH=arm
           export CROSS_COMPILE="$GITHUB_WORKSPACE/gcc/bin/arm-linux-androideabi-"
+
           mkdir -p out
 
-          make -C kernel O="$GITHUB_WORKSPACE/out" lineage-j2lte_defconfig
+          make -C kernel \
+            O="$GITHUB_WORKSPACE/out" \
+            lineage-j2lte_defconfig
 
-          kernel/scripts/config --file out/.config \
-            --enable ANDROID_BINDER_IPC \
-            --set-str ANDROID_BINDER_DEVICES "binder,hwbinder,vndbinder"
+          grep '^CONFIG_ANDROID_BINDER_IPC=y$' out/.config
 
-          make -C kernel O="$GITHUB_WORKSPACE/out" olddefconfig
+          echo "Configuracion del kernel lista"
 
-          grep 'CONFIG_ANDROID_BINDER' out/.config
+      - name: Compilar kernel base
+        shell: bash
+        run: |
+          set -euxo pipefail
 
-          make -C kernel O="$GITHUB_WORKSPACE/out" -j2 zImage-dtb
+          export ARCH=arm
+          export CROSS_COMPILE="$GITHUB_WORKSPACE/gcc/bin/arm-linux-androideabi-"
 
-          test -s out/arch/arm/boot/zImage-dtb
+          make -C kernel \
+            O="$GITHUB_WORKSPACE/out" \
+            -j2 zImage
+
+          test -s out/arch/arm/boot/zImage
+
+          echo "Kernel compilado correctamente"
 
       - name: Guardar resultado
         uses: actions/upload-artifact@v4
         with:
-          name: J200M-Oreo-Kernel-EXPERIMENTAL
-          path: out/arch/arm/boot/zImage-dtb
+          name: J200M-3475Kernel-BASE
+          path: |
+            out/arch/arm/boot/zImage
+            out/.config
           if-no-files-found: error
-
