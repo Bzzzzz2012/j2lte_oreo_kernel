@@ -1,5 +1,5 @@
 
-name: J200M Oreo Kernel - Base 3475 FIXED V2
+name: J200M Oreo - Binder Backport Experimental
 
 on:
   push:
@@ -12,14 +12,21 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Descargar 3475Kernel
+      - name: Descargar kernel base
         uses: actions/checkout@v4
         with:
           repository: KarlosComK/android_kernel_samsung_exynos3475
           ref: cm-14.1
           path: kernel
 
-      - name: Descargar compilador ARM GCC 4.9
+      - name: Descargar Binder moderno
+        uses: actions/checkout@v4
+        with:
+          repository: Exynos3475/android_kernel_samsung_exynos3475
+          ref: lineage-17.1
+          path: donor
+
+      - name: Descargar compilador ARM
         uses: actions/checkout@v4
         with:
           repository: LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9
@@ -30,10 +37,62 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            make bc bison flex \
-            libssl-dev libelf-dev
+            make bc bison flex libssl-dev libelf-dev
 
-      - name: Configurar kernel J2LTE
+      - name: Integrar Binder experimental
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          SRC="donor/drivers/staging/android"
+          DST="kernel/drivers/staging/android"
+
+          test -f "$SRC/binder.c"
+          test -f "$SRC/binder_alloc.c"
+
+          cp "$SRC/binder.c" "$DST/"
+          cp "$SRC/binder_alloc.c" "$DST/"
+
+          for f in binder_alloc.h binder_internal.h binder_trace.h
+          do
+            if [ -f "$SRC/$f" ]; then
+              cp "$SRC/$f" "$DST/"
+            fi
+          done
+
+          if [ -f donor/include/uapi/linux/android/binder.h ]; then
+            mkdir -p kernel/include/uapi/linux/android
+            cp donor/include/uapi/linux/android/binder.h \
+              kernel/include/uapi/linux/android/
+          fi
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          makefile = Path("kernel/drivers/staging/android/Makefile")
+          data = makefile.read_text()
+
+          if "binder_alloc.o" not in data:
+              data += (
+                  "\nobj-$(CONFIG_ANDROID_BINDER_IPC)"
+                  " += binder_alloc.o\n"
+              )
+              makefile.write_text(data)
+
+          kconfig = Path("kernel/drivers/staging/android/Kconfig")
+          data = kconfig.read_text()
+
+          if "config ANDROID_BINDER_DEVICES" not in data:
+              data += """
+          config ANDROID_BINDER_DEVICES
+              string "Android Binder devices"
+              depends on ANDROID_BINDER_IPC
+              default "binder,hwbinder,vndbinder"
+          """
+              kconfig.write_text(data)
+          PY
+
+      - name: Configurar y compilar
         shell: bash
         run: |
           set -euxo pipefail
@@ -43,39 +102,36 @@ jobs:
 
           mkdir -p out
 
-          make -C kernel \
-            O="$GITHUB_WORKSPACE/out" \
+          make -C kernel O="$GITHUB_WORKSPACE/out" \
             HOSTCFLAGS="-O2 -fcommon" \
             lineage-j2lte_defconfig
 
-          grep '^CONFIG_ANDROID_BINDER_IPC=y$' out/.config
+          kernel/scripts/config --file out/.config \
+            --enable ANDROID_BINDER_IPC \
+            --disable ANDROID_BINDER_IPC_32BIT \
+            --set-str ANDROID_BINDER_DEVICES \
+              "binder,hwbinder,vndbinder"
 
-      - name: Compilar kernel base
-        shell: bash
-        run: |
-          set -euxo pipefail
+          make -C kernel O="$GITHUB_WORKSPACE/out" \
+            HOSTCFLAGS="-O2 -fcommon" olddefconfig
 
-          export ARCH=arm
-          export CROSS_COMPILE="$GITHUB_WORKSPACE/gcc/bin/arm-linux-androideabi-"
+          grep -Fx \
+            'CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"' \
+            out/.config
 
-          make -C kernel \
-            O="$GITHUB_WORKSPACE/out" \
+          make -C kernel O="$GITHUB_WORKSPACE/out" \
             HOSTCFLAGS="-O2 -fcommon" \
             -j2 zImage
 
           test -s out/arch/arm/boot/zImage
 
-          echo "KERNEL COMPILADO CORRECTAMENTE"
-
-
-      - name: Guardar resultado
+      - name: Guardar resultado experimental
         uses: actions/upload-artifact@v4
         with:
-          name: J200M-3475Kernel-BASE-FIXED-V3
+          name: J200M-Oreo-Binder-EXPERIMENTAL
           path: |
             out/arch/arm/boot/zImage
             out/.config
           include-hidden-files: true
           if-no-files-found: error
-
 
