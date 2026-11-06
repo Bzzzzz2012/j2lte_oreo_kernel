@@ -1,5 +1,5 @@
 
-name: J200M Oreo - Binder Backport Experimental
+name: J200M Oreo - Auditoria Binder
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  audit:
     runs-on: ubuntu-22.04
 
     steps:
@@ -19,119 +19,105 @@ jobs:
           ref: cm-14.1
           path: kernel
 
-      - name: Descargar Binder moderno
+      - name: Descargar kernel donante
         uses: actions/checkout@v4
         with:
           repository: Exynos3475/android_kernel_samsung_exynos3475
           ref: lineage-17.1
           path: donor
 
-      - name: Descargar compilador ARM
-        uses: actions/checkout@v4
-        with:
-          repository: LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9
-          ref: lineage-19.1
-          path: gcc
-
-      - name: Instalar dependencias
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            make bc bison flex libssl-dev libelf-dev
-
-      - name: Integrar Binder experimental
+      - name: Analizar compatibilidad Binder
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          SRC="donor/drivers/staging/android"
-          DST="kernel/drivers/staging/android"
-
-          test -f "$SRC/binder.c"
-          test -f "$SRC/binder_alloc.c"
-
-          cp "$SRC/binder.c" "$DST/"
-          cp "$SRC/binder_alloc.c" "$DST/"
-
-          for f in binder_alloc.h binder_internal.h binder_trace.h
-          do
-            if [ -f "$SRC/$f" ]; then
-              cp "$SRC/$f" "$DST/"
-            fi
-          done
-
-          if [ -f donor/include/uapi/linux/android/binder.h ]; then
-            mkdir -p kernel/include/uapi/linux/android
-            cp donor/include/uapi/linux/android/binder.h \
-              kernel/include/uapi/linux/android/
-          fi
-
-          python3 - <<'PY'
+          python3 - <<'PY' > binder-audit.txt
           from pathlib import Path
+          import subprocess
 
-          makefile = Path("kernel/drivers/staging/android/Makefile")
-          data = makefile.read_text()
+          symbols = [
+              "BC_REPLY_SG",
+              "binder_uintptr_t",
+              "binder_size_t",
+              "BINDER_TYPE_PTR",
+              "FLAT_BINDER_FLAG_INHERIT_RT",
+              "ANDROID_BINDER_DEVICES",
+          ]
 
-          if "binder_alloc.o" not in data:
-              data += (
-                  "\nobj-$(CONFIG_ANDROID_BINDER_IPC)"
-                  " += binder_alloc.o\n"
-              )
-              makefile.write_text(data)
+          for name in ("kernel", "donor"):
+              root = Path(name)
+              print("=" * 55)
+              print("REPOSITORIO:", name)
+              print("=" * 55)
 
-          kconfig = Path("kernel/drivers/staging/android/Kconfig")
-          data = kconfig.read_text()
+              commit = subprocess.check_output(
+                  ["git", "-C", name, "rev-parse", "HEAD"],
+                  text=True
+              ).strip()
+              print("Commit:", commit)
 
-          if "config ANDROID_BINDER_DEVICES" not in data:
-              data += """
-          config ANDROID_BINDER_DEVICES
-              string "Android Binder devices"
-              depends on ANDROID_BINDER_IPC
-              default "binder,hwbinder,vndbinder"
-          """
-              kconfig.write_text(data)
+              binder = root / "drivers/staging/android/binder.c"
+              if binder.exists():
+                  content = binder.read_text(errors="replace")
+                  print("\nINCLUDES DE BINDER.C:")
+                  for line in content.splitlines():
+                      if line.startswith("#include"):
+                          print(" ", line)
+                  print("\nSIMBOLOS EN BINDER.C:")
+                  for symbol in symbols:
+                      print(symbol, "=", symbol in content)
+              else:
+                  print("No existe binder.c en la ruta esperada")
+
+              print("\nCABECERAS BINDER:")
+              tracked = subprocess.check_output(
+                  ["git", "-C", name, "ls-files"],
+                  text=True
+              ).splitlines()
+
+              headers = [
+                  p for p in tracked
+                  if p.endswith(".h")
+                  and "binder" in Path(p).name.lower()
+              ]
+
+              for rel in headers:
+                  path = root / rel
+                  data = path.read_text(errors="replace")
+                  print("\n", rel)
+                  for symbol in symbols:
+                      if symbol in data:
+                          print("  CONTIENE:", symbol)
+
+              for rel in (
+                  "drivers/staging/android/Makefile",
+                  "drivers/staging/android/Kconfig",
+                  "arch/arm/configs/lineage-j2lte_defconfig",
+              ):
+                  path = root / rel
+                  if not path.exists():
+                      continue
+
+                  print("\nARCHIVO:", rel)
+                  for num, line in enumerate(
+                      path.read_text(
+                          errors="replace"
+                      ).splitlines(), 1
+                  ):
+                      if "BINDER" in line or "binder" in line:
+                          print(f"{num}: {line}")
+
+              print()
+
+          print("AUDITORIA TERMINADA")
           PY
 
-      - name: Configurar y compilar
-        shell: bash
-        run: |
-          set -euxo pipefail
+          cat binder-audit.txt
 
-          export ARCH=arm
-          export CROSS_COMPILE="$GITHUB_WORKSPACE/gcc/bin/arm-linux-androideabi-"
-
-          mkdir -p out
-
-          make -C kernel O="$GITHUB_WORKSPACE/out" \
-            HOSTCFLAGS="-O2 -fcommon" \
-            lineage-j2lte_defconfig
-
-          kernel/scripts/config --file out/.config \
-            --enable ANDROID_BINDER_IPC \
-            --disable ANDROID_BINDER_IPC_32BIT \
-            --set-str ANDROID_BINDER_DEVICES \
-              "binder,hwbinder,vndbinder"
-
-          make -C kernel O="$GITHUB_WORKSPACE/out" \
-            HOSTCFLAGS="-O2 -fcommon" olddefconfig
-
-          grep -Fx \
-            'CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"' \
-            out/.config
-
-          make -C kernel O="$GITHUB_WORKSPACE/out" \
-            HOSTCFLAGS="-O2 -fcommon" \
-            -j2 zImage
-
-          test -s out/arch/arm/boot/zImage
-
-      - name: Guardar resultado experimental
+      - name: Guardar informe
         uses: actions/upload-artifact@v4
         with:
-          name: J200M-Oreo-Binder-EXPERIMENTAL
-          path: |
-            out/arch/arm/boot/zImage
-            out/.config
-          include-hidden-files: true
+          name: J200M-BINDER-AUDITORIA
+          path: binder-audit.txt
           if-no-files-found: error
 
