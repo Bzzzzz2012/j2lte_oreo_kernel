@@ -67,12 +67,15 @@ jobs:
 
           echo "KERNEL COMPILADO CORRECTAMENTE"
 
+
       - name: Guardar resultado
         uses: actions/upload-artifact@v4
         with:
-          name: J200M-3475Kernel-BASE-FIXED-V2
+          name: J200M-3475Kernel-BASE-FIXED-V3
           path: |
             out/arch/arm/boot/zImage
             out/.config
+          include-hidden-files: true
           if-no-files-found: error
+
 
