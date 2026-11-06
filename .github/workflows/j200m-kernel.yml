@@ -1,5 +1,5 @@
 
-name: J200M Oreo - Binder V2 Experimental
+name: J200M Oreo - Binder V3 Experimental
 
 on:
   push:
@@ -26,7 +26,7 @@ jobs:
           ref: lineage-17.1
           path: donor
 
-      - name: Descargar GCC ARM
+      - name: Descargar compilador ARM
         uses: actions/checkout@v4
         with:
           repository: LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9
@@ -39,33 +39,27 @@ jobs:
           sudo apt-get install -y \
             make bc bison flex libssl-dev libelf-dev
 
-      - name: Integrar Binder y sus cabeceras
+      - name: Integrar archivos Binder
         shell: bash
         run: |
           set -euxo pipefail
 
           python3 - <<'PY'
           from pathlib import Path
-          import re
           import shutil
+          import re
 
           src = Path("donor/drivers/staging/android")
           dst = Path("kernel/drivers/staging/android")
 
-          files = [
+          for name in [
               "binder.c",
               "binder.h",
               "binder_alloc.c",
               "binder_alloc.h",
               "binder_trace.h",
-          ]
-
-          for name in files:
-              origin = src / name
-              if not origin.is_file():
-                  raise RuntimeError(f"Falta: {origin}")
-
-              shutil.copy2(origin, dst / name)
+          ]:
+              shutil.copy2(src / name, dst / name)
               print("COPIADO:", name)
 
           makefile = dst / "Makefile"
@@ -84,17 +78,13 @@ jobs:
           )
 
           if count != 1:
-              raise RuntimeError(
-                  "No se pudo actualizar Makefile"
-              )
+              raise RuntimeError("Error en Makefile Binder")
 
           makefile.write_text(data)
 
-          old = dst / "Kconfig"
-          donor = src / "Kconfig"
-
-          config = old.read_text()
-          source = donor.read_text()
+          kconfig = dst / "Kconfig"
+          config = kconfig.read_text()
+          source = (src / "Kconfig").read_text()
 
           for symbol in (
               "ANDROID_BINDER_DEVICES",
@@ -115,18 +105,101 @@ jobs:
 
               if not match:
                   raise RuntimeError(
-                      f"Falta {symbol} en Kconfig donante"
+                      f"No se encontro {symbol}"
                   )
 
               config += "\n" + match.group(0).rstrip()
               config += "\n"
 
-          old.write_text(config)
-
-          print("INTEGRACION DE BINDER COMPLETADA")
+          kconfig.write_text(config)
           PY
 
-      - name: Configurar kernel
+      - name: Adaptar prioridades de Binder a Linux 3.10
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          folder = Path(
+              "kernel/drivers/staging/android"
+          )
+
+          header = folder / "binder_prio_compat.h"
+
+          header.write_text("""
+          #ifndef BINDER_PRIO_COMPAT_H
+          #define BINDER_PRIO_COMPAT_H
+
+          #include <linux/sched.h>
+
+          #ifndef DEFAULT_PRIO
+          #error "DEFAULT_PRIO no definido"
+          #endif
+
+          #define BINDER_COMPAT_MIN_NICE (-20)
+          #define BINDER_COMPAT_MAX_NICE 19
+
+          #define binder_compat_prio_to_nice(p) \\
+              ((p) - DEFAULT_PRIO)
+
+          #define binder_compat_nice_to_prio(n) \\
+              ((n) + DEFAULT_PRIO)
+
+          static inline long binder_compat_rlimit_to_nice(
+              long limit)
+          {
+              return BINDER_COMPAT_MAX_NICE - limit + 1;
+          }
+
+          #endif
+          """)
+
+          binder = folder / "binder.c"
+          source = binder.read_text()
+
+          anchor = '#include "binder_alloc.h"'
+
+          if source.count(anchor) != 1:
+              raise RuntimeError(
+                  "No se encontro el include de binder_alloc"
+              )
+
+          source = source.replace(
+              anchor,
+              anchor + '\n#include "binder_prio_compat.h"'
+          )
+
+          replacements = {
+              "PRIO_TO_NICE(":
+                  "binder_compat_prio_to_nice(",
+              "NICE_TO_PRIO(":
+                  "binder_compat_nice_to_prio(",
+              "rlimit_to_nice(":
+                  "binder_compat_rlimit_to_nice(",
+              "MIN_NICE":
+                  "BINDER_COMPAT_MIN_NICE",
+              "MAX_NICE":
+                  "BINDER_COMPAT_MAX_NICE",
+          }
+
+          for old, new in replacements.items():
+              count = source.count(old)
+
+              if count == 0:
+                  raise RuntimeError(
+                      f"No se encontro: {old}"
+                  )
+
+              source = source.replace(old, new)
+              print(f"ADAPTADO {old}: {count}")
+
+          binder.write_text(source)
+          print("COMPATIBILIDAD DE PRIORIDADES APLICADA")
+          PY
+
+      - name: Configurar kernel Oreo
         shell: bash
         run: |
           set -euxo pipefail
@@ -160,7 +233,7 @@ jobs:
             'CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"' \
             out/.config
 
-      - name: Compilar Binder V2
+      - name: Compilar Binder V3
         shell: bash
         run: |
           set -euo pipefail
@@ -174,24 +247,24 @@ jobs:
             -j2 zImage > build.log 2>&1
           then
             test -s out/arch/arm/boot/zImage
-            echo "KERNEL COMPILADO CORRECTAMENTE"
-            tail -n 15 build.log
+            echo "KERNEL COMPILADO"
+            tail -n 20 build.log
           else
-            echo "ERRORES PRINCIPALES:"
+            echo "ERRORES:"
             grep -nE \
               'error:|fatal error:|undefined reference|Error [0-9]' \
-              build.log | head -n 35 || true
+              build.log | head -n 40 || true
 
-            echo "ULTIMAS LINEAS:"
-            tail -n 35 build.log
+            echo "FINAL DEL LOG:"
+            tail -n 40 build.log
             exit 1
           fi
 
-      - name: Guardar log de diagnostico
+      - name: Guardar diagnostico
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: J200M-Binder-V2-LOG
+          name: J200M-Binder-V3-LOG
           path: |
             build.log
             out/.config
@@ -202,6 +275,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: J200M-Binder-V2-KERNEL
+          name: J200M-Binder-V3-KERNEL
           path: out/arch/arm/boot/zImage
           if-no-files-found: error
