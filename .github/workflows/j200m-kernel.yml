@@ -1,5 +1,5 @@
 
-name: J200M Oreo Kernel - Base 3475 FIXED
+name: J200M Oreo Kernel - Base 3475 FIXED V2
 
 on:
   push:
@@ -33,24 +33,6 @@ jobs:
             make bc bison flex \
             libssl-dev libelf-dev
 
-      - name: Corregir error yylloc de DTC
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          for f in \
-            kernel/scripts/dtc/dtc-lexer.l \
-            kernel/scripts/dtc/dtc-lexer.lex.c_shipped
-          do
-            if [ -f "$f" ]; then
-              sed -i \
-                '/^[[:space:]]*YYLTYPE[[:space:]]\+yylloc;[[:space:]]*$/d' \
-                "$f"
-            fi
-          done
-
-          echo "Correccion DTC aplicada"
-
       - name: Configurar kernel J2LTE
         shell: bash
         run: |
@@ -63,6 +45,7 @@ jobs:
 
           make -C kernel \
             O="$GITHUB_WORKSPACE/out" \
+            HOSTCFLAGS="-O2 -fcommon" \
             lineage-j2lte_defconfig
 
           grep '^CONFIG_ANDROID_BINDER_IPC=y$' out/.config
@@ -77,17 +60,19 @@ jobs:
 
           make -C kernel \
             O="$GITHUB_WORKSPACE/out" \
+            HOSTCFLAGS="-O2 -fcommon" \
             -j2 zImage
 
           test -s out/arch/arm/boot/zImage
 
-          echo "Kernel compilado correctamente"
+          echo "KERNEL COMPILADO CORRECTAMENTE"
 
-      - name: Guardar kernel compilado
+      - name: Guardar resultado
         uses: actions/upload-artifact@v4
         with:
-          name: J200M-3475Kernel-BASE-FIXED
+          name: J200M-3475Kernel-BASE-FIXED-V2
           path: |
             out/arch/arm/boot/zImage
             out/.config
           if-no-files-found: error
+
