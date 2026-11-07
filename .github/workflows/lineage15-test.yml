@@ -1,0 +1,118 @@
+
+name: J200M Oreo - Kernel Lineage 15.1 Test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/j200m-lineage15-test.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Descargar kernel Oreo
+        uses: actions/checkout@v4
+        with:
+          repository: KarlosComK/android_kernel_samsung_exynos3475
+          ref: lineage-15.1
+          path: kernel
+
+      - name: Descargar GCC ARM
+        uses: actions/checkout@v4
+        with:
+          repository: LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9
+          ref: lineage-19.1
+          path: gcc
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            make bc bison flex libssl-dev libelf-dev
+
+      - name: Configurar y auditar kernel
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export ARCH=arm
+          export CROSS_COMPILE="$GITHUB_WORKSPACE/gcc/bin/arm-linux-androideabi-"
+
+          mkdir -p out
+
+          git -C kernel log -1 \
+            --format='%H %s' > audit.txt
+
+          echo "CONFIGURACIONES DISPONIBLES:" \
+            >> audit.txt
+
+          find kernel/arch/arm/configs \
+            -iname '*j2*' >> audit.txt
+
+          make -C kernel \
+            O="$GITHUB_WORKSPACE/out" \
+            HOSTCFLAGS="-O2 -fcommon" \
+            lineage-j2lte_defconfig
+
+          echo "CONFIGURACION BINDER:" >> audit.txt
+
+          grep -E \
+            'CONFIG_ANDROID_BINDER|CONFIG_ASHMEM|CONFIG_ION' \
+            out/.config >> audit.txt || true
+
+          echo "ARCHIVOS BINDER:" >> audit.txt
+
+          find kernel/drivers/staging/android \
+            -iname '*binder*' >> audit.txt
+
+          cat audit.txt
+
+      - name: Compilar kernel Oreo
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export ARCH=arm
+          export CROSS_COMPILE="$GITHUB_WORKSPACE/gcc/bin/arm-linux-androideabi-"
+
+          if make -C kernel \
+            O="$GITHUB_WORKSPACE/out" \
+            HOSTCFLAGS="-O2 -fcommon" \
+            -j2 zImage > build.log 2>&1
+          then
+            test -s out/arch/arm/boot/zImage
+
+            echo "KERNEL LINEAGE 15.1 COMPILADO"
+            tail -n 20 build.log
+          else
+            echo "ERRORES ENCONTRADOS:"
+
+            grep -nE \
+              'error:|fatal error:|undefined reference|Error [0-9]' \
+              build.log | head -n 40 || true
+
+            tail -n 30 build.log
+            exit 1
+          fi
+
+      - name: Guardar auditoria
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: J200M-Lineage15-AUDIT
+          path: |
+            audit.txt
+            build.log
+            out/.config
+          include-hidden-files: true
+          if-no-files-found: warn
+
+      - name: Guardar kernel experimental
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: J200M-Lineage15-KERNEL
+          path: out/arch/arm/boot/zImage
+          if-no-files-found: error
